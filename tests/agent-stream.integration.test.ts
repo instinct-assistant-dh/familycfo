@@ -7,7 +7,7 @@ import { testDb } from './helpers.js';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), cpSync: vi.fn(), mkdirSync: vi.fn(), rmSync: vi.fn(), writeFileSync: vi.fn(), existsSync: vi.fn(() => false) }));
 vi.mock('child_process', () => ({ spawn: mocks.spawn }));
-vi.mock('fs', () => ({ cpSync: mocks.cpSync, mkdirSync: mocks.mkdirSync, rmSync: mocks.rmSync, writeFileSync: mocks.writeFileSync, existsSync: mocks.existsSync }));
+vi.mock('fs', async importOriginal => ({ ...await importOriginal<typeof import('fs')>(), cpSync: mocks.cpSync, mkdirSync: mocks.mkdirSync, rmSync: mocks.rmSync, writeFileSync: mocks.writeFileSync, existsSync: mocks.existsSync }));
 import { agentRoutes } from '../src/server/agent.js';
 let db: DB; let app: FastifyInstance;
 beforeEach(() => { vi.clearAllMocks(); db = testDb(); app = Fastify(); agentRoutes(app, db); });
