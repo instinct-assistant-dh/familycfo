@@ -61,22 +61,17 @@ of 85% branch coverage or whole-React-app coverage. HTML, LCOV and JSON summary 
 under `coverage/` for inspection. The real-bank browser login, live OTP behavior and external service
 availability remain unverified; mocked adapter tests do not prove those services work live.
 
-## Confirmed defects
+## Fixed defects
 
-`tests/known-bugs.test.ts` contains four explicit `it.fails` regressions. They assert the desired
-behavior and currently fail for the right reason. Vitest labels them **expected fail**, not ordinary
-passing tests. If a production fix makes an assertion pass, Vitest fails the expected-failure test
-until `.fails` is removed. No production logic was changed in this test-only work.
+`tests/regressions.test.ts` holds regression tests for four defects that were found while adding coverage and
+then fixed:
 
-1. Pension re-import duplicates a deposit whose `salary_month` is NULL. SQLite's unique constraint
-   does not treat two NULLs as equal, so `ON CONFLICT` never updates that row.
-2. Net worth history uses `MAX(id)` for snapshots rather than newest date. Inserting an older
-   backfilled snapshot after a newer one changes month-end history incorrectly, even though the
-   current net worth item still uses the right date.
-3. Manual transaction validation accepts impossible dates such as 2026-02-31 and normalizes them
-   into March instead of returning 400.
-4. Postponing a planned expense dated January 31 by one month uses `setUTCMonth`, rolling into
-   March rather than clamping to February's last day.
-
-These are separate follow-up fixes. Do not replace the desired assertions with the buggy results
-just to make the suite green.
+1. Pension re-import duplicated a deposit whose `salary_month` is NULL (SQLite treats NULLs as distinct in a
+   `UNIQUE` constraint). Migration 15 removes existing duplicates (newest row kept) and adds a unique index on
+   `COALESCE(salary_month, '')`; the import upserts against it.
+2. Net worth history picked the highest snapshot `id` instead of the latest snapshot date, for assets and
+   liabilities.
+3. Manual and planned transaction dates accepted impossible dates such as 2026-02-31 (they rolled into March).
+   They now return 400.
+4. Postponing a planned expense dated Jan 31 by a month skipped February. The day now clamps to the end of the
+   target month.
