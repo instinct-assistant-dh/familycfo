@@ -89,6 +89,8 @@ export function importPensionReport(db: DB, report: Report): { assets: number; c
       else db.prepare(`INSERT INTO asset_snapshots (asset_id, date, value, currency) VALUES (?, ?, ?, 'ILS')`).run(assetId, report.asOf, p.balance);
 
       for (const [valueDate, month, salary, employee, employer, severance, total] of p.deposits ?? []) {
+        // Migration 15 supplies the NULL-safe expression index; the legacy UNIQUE rule
+        // remains for schema compatibility. Regression tests cover both key shapes.
         deposits += db.prepare(`INSERT INTO asset_deposits (asset_id, value_date, salary_month, salary, employee, employer, severance, total)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (asset_id, value_date, COALESCE(salary_month, '')) DO UPDATE SET salary = excluded.salary, employee = excluded.employee,
