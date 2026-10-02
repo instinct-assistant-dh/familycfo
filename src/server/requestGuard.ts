@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
  * Requests without an `Origin` (curl, scripts, same-origin GETs) are allowed: only a browser sends one, and a
  * browser always sends it on a cross-site write.
  */
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const LOOPBACK_AUTHORITY = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?$/i;
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 /** Types a cross-site HTML form can send without a CORS preflight — never legitimate for this API. */
 const FORM_TYPES = new Set(['application/x-www-form-urlencoded', 'multipart/form-data', 'text/plain']);
@@ -16,21 +16,13 @@ const FORM_TYPES = new Set(['application/x-www-form-urlencoded', 'multipart/form
 /** `host` is a `Host` header value ("localhost:4310"); true when it names this computer's loopback. */
 export function isLoopbackHost(host: string | undefined): boolean {
   if (!host) return false;
-  try {
-    return LOOPBACK_HOSTS.has(new URL(`http://${host}`).hostname);
-  } catch {
-    return false;
-  }
+  const match = LOOPBACK_AUTHORITY.exec(host);
+  return !!match && match[0] === host && (match[1] === undefined || (Number(match[1]) >= 1 && Number(match[1]) <= 65535));
 }
 
 /** True when an `Origin` header value is a page served from the loopback (the app's own web UI, any port). */
 export function isLoopbackOrigin(origin: string): boolean {
-  try {
-    const url = new URL(origin);
-    return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname);
-  } catch {
-    return false; // includes the opaque origin "null"
-  }
+  return origin.startsWith('http://') && isLoopbackHost(origin.slice(7));
 }
 
 /** Register before any route so the hook covers all of them. */
