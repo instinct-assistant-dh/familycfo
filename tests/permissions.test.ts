@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { openDb } from '../src/db/connection.js';
-import { broadPermissions, chmodPrivate, mkdirPrivate, warnBroadPermissions } from '../src/permissions.js';
+import { broadPermissions, chmodPrivate, mkdirPrivate, warnBroadPermissions, createAgentWorkdir, ensureAgentWorkdir, getAgentWorkdir, sensitivePaths } from '../src/permissions.js';
 import { chromeArgs } from '../src/scraper.js';
 
 const posix = process.platform !== 'win32';
@@ -15,7 +15,7 @@ describe.skipIf(!posix)('owner-only files', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cfo-perm-')); });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
-    process.env.BANK_DB = saved.db; if (saved.db === undefined) delete process.env.BANK_DB;
+    vi.unstubAllEnvs();
   });
 
   it('creates a new database and its WAL files owner-only, even with a permissive umask', () => {
@@ -52,6 +52,34 @@ describe.skipIf(!posix)('owner-only files', () => {
     } finally { process.umask(old); }
   });
 
+  it('uses unique owner-only work dirs despite a pre-existing broad legacy directory', () => {
+    const legacy = join(dir, 'household-agent');
+    mkdirSync(legacy); chmodSync(legacy, 0o755);
+    const work = createAgentWorkdir(dir);
+    expect(work).not.toBe(legacy);
+    expect(mode(work)).toBe(0o700);
+    chmodSync(work, 0o755); ensureAgentWorkdir(work);
+    expect(mode(work)).toBe(0o700);
+    expect(mode(legacy)).toBe(0o755);
+    const link = join(dir, 'planted'); symlinkSync(work, link);
+    expect(() => ensureAgentWorkdir(link)).toThrow('owned by the current user');
+  });
+
+  it('includes directory overrides, sidecars, backups and active chat workspace in warnings', () => {
+    vi.stubEnv('BANK_DB', join(dir, 'bank.db'));
+    vi.stubEnv('POLICIES_DIR', join(dir, 'policies'));
+    vi.stubEnv('REPORTS_DIR', join(dir, 'reports'));
+    const paths = sensitivePaths();
+    expect(paths).toEqual(expect.arrayContaining([join(dir, 'bank.db-wal'), join(dir, 'bank.db-shm'), join(dir, 'policies'), join(dir, 'reports')]));
+    for (const file of [join(dir, 'bank.db-wal'), join(dir, 'bank.db-shm')]) {
+      writeFileSync(file, ''); chmodSync(file, 0o644);
+      expect(broadPermissions(file)).toContain('chmod 600');
+    }
+    const work = getAgentWorkdir();
+    expect(sensitivePaths()).toContain(work);
+    expect(mode(work)).toBe(0o700);
+  });
+
   it('chmodPrivate ignores a missing file', () => {
     expect(() => chmodPrivate(join(dir, 'nope'))).not.toThrow();
   });
@@ -74,7 +102,9 @@ describe.skipIf(!posix)('owner-only files', () => {
     const cwd = process.cwd();
     process.chdir(dir);
     try {
-      process.env.BANK_DB = join(dir, 'bank.db');
+      vi.stubEnv('BANK_DB', join(dir, 'bank.db'));
+      vi.stubEnv('POLICIES_DIR', join(dir, 'policies'));
+      vi.stubEnv('REPORTS_DIR', join(dir, 'reports'));
       writeFileSync(process.env.BANK_DB, ''); chmodSync(process.env.BANK_DB, 0o600);
       const lines: string[] = [];
       const warnings = warnBroadPermissions(m => lines.push(m));
