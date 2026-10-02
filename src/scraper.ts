@@ -275,6 +275,9 @@ export async function scrapeAll(config: Config, db: DB = getDb(), hooks: ScrapeH
       summaries.push({ company: account.companyId, success: true, newTransactionIds: newIds });
       hooks.onProgress?.({ type: 'done', company: account.companyId, success: true, newTransactions: newIds.length });
     } catch (err) {
+      if (process.env.CHROME_NO_SANDBOX !== '1' && /sandbox|running as root/i.test(String(err))) {
+        console.error('Chrome could not use its sandbox. Run as a non-root user and check OS sandbox support (including AppArmor). Only in an isolated Docker / CI environment, CHROME_NO_SANDBOX=1 disables it.');
+      }
       console.error(`Error scraping ${account.companyId}:`, err);
       recordScrapeRun(db, { company: account.companyId, startedAt, success: false,
         errorType: 'EXCEPTION', errorMessage: String(err) });
