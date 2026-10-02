@@ -17,6 +17,22 @@ interface TxQuery {
 
 const EDITABLE = ['category_id', 'member_id', 'business_id', 'business_share_pct', 'kind', 'fixed_override', 'excluded', 'notes'];
 
+/** True for a real YYYY-MM-DD calendar date (rejects 2026-02-31, 2026-13-01, 2026-00-10). */
+export function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+/** Add whole months to a YYYY-MM-DD date; a day past the end of the target month clamps to its last day (Jan 31 + 1 → Feb 28/29). */
+export function addMonthsClamped(date: string, months: number): string {
+  const [y, m, day] = date.split('-').map(Number);
+  const total = y * 12 + (m - 1) + Math.trunc(months);
+  const ty = Math.floor(total / 12), tm = total % 12;
+  const last = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  return `${String(ty).padStart(4, '0')}-${String(tm + 1).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
+}
+
 export function parseFilter(q: TxQuery) {
   return {
     memberId: q.member ? Number(q.member) : undefined,
@@ -108,7 +124,7 @@ export function transactionRoutes(app: FastifyInstance, db: DB): void {
   const manualValues = (b: ManualBody) => {
     const description = String(b.description ?? '').trim();
     const amount = Math.abs(Number(b.amount));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date ?? '') || !description || !(amount > 0)) return null;
+    if (!isCalendarDate(b.date) || !description || !(amount > 0)) return null;
     // stored like scraped rows (ISO); noon in Israel so the local date never shifts
     const iso = new Date(`${b.date}T12:00:00+03:00`).toISOString();
     const signed = b.kind === 'income' ? amount : -amount;
@@ -165,7 +181,7 @@ export function transactionRoutes(app: FastifyInstance, db: DB): void {
     const description = String(b.description ?? '').trim();
     const amount = Math.abs(Number(b.amount));
     const installments = Math.max(1, Math.min(60, Math.round(Number(b.installments ?? 1)) || 1));
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date ?? '') || !description || !(amount > 0) || !b.accountId) return null;
+    if (!isCalendarDate(b.date) || !description || !(amount > 0) || !b.accountId) return null;
     return { description, amount, date: b.date, account_id: b.accountId, installments, match_pattern: String(b.matchPattern ?? '').trim() || null,
       category_id: b.categoryId ?? null, member_id: b.memberId ?? null, tag_ids: JSON.stringify(b.tagIds ?? []), notes: String(b.notes ?? '').trim() || null };
   };
@@ -209,10 +225,8 @@ export function transactionRoutes(app: FastifyInstance, db: DB): void {
     if (b.status === 'cancelled') db.prepare(`UPDATE planned_items SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
     if (b.status === 'planned') unlinkPlanned(db, id);
     if (b.postponeMonths) {
-      const date = db.prepare(`SELECT date FROM planned_items WHERE id = ?`).pluck().get(id) as string;
-      const d = new Date(`${date}T12:00:00Z`);
-      d.setUTCMonth(d.getUTCMonth() + b.postponeMonths);
-      db.prepare(`UPDATE planned_items SET date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(d.toISOString().slice(0, 10), id);
+      const date = db.prepare(`SELECT date FROM planned_items WHERE id = ?`).pluck().get(id) as string | undefined;
+      if (date) db.prepare(`UPDATE planned_items SET date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(addMonthsClamped(date, b.postponeMonths), id);
     }
     if (b.status !== 'cancelled') afterPlannedChange();
     return { ok: true };
