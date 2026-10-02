@@ -78,6 +78,9 @@ It understands how Israeli money actually moves:
   `accounts.json` still holds the logins in plain text — keep the disk encrypted.
 - **The scraper's Chrome keeps its sandbox on.** It starts with a fresh temporary profile each run. Only inside Docker
   or CI, where Chrome cannot create its sandbox, set `CHROME_NO_SANDBOX=1` (the scraper logs a warning).
+  On a regular host, run Chrome as a non-root user and check OS sandbox support first (Ubuntu 24.04 AppArmor
+  can restrict user namespaces). A sandbox-related launch error logs this hint; do not disable it for bank logins
+  on a normal computer.
 - Outgoing network calls, and what they send:
   - your banks / card companies (the scraper logs in as you, in a local Chrome);
   - Bank of Israel exchange rates (nothing personal);
