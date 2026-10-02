@@ -1,0 +1,82 @@
+# Testing
+
+Tests use invented household data only. Never point them at a real bank database, credentials file,
+insurance document directory or scraped account. No real bank or Claude login is needed.
+
+## Commands
+
+```sh
+npm ci
+npm test                    # unit + in-process integration + subprocess safety tests
+npm run test:integration    # integration files only
+npm run test:coverage       # V8 coverage, with regression thresholds
+npm run typecheck
+npm run typecheck:tests     # tests and configuration are typechecked too
+npm --prefix web run typecheck
+npx playwright install chromium
+npm run test:e2e            # real Chromium + Vite proxy + API + temporary SQLite
+```
+
+On a minimal Linux host, `npx playwright install --with-deps chromium` installs the browser's system
+libraries too (requires privileges for the system packages). E2E uses ports 14310 and 15180. They must
+be free. It does not reuse an existing server. The harness deletes its temporary database and
+policy/report directories on shutdown. Reports go into ignored `test-results/` and `playwright-report/`.
+
+## Layers and boundaries
+
+- Pure accounting and date logic: household/business shares, incoming money, card installments,
+  recurrence, payback windows, forecasts, savings capacity, planned expenses, FX and valuation.
+- SQLite integration: migrations, imports, idempotent reprocessing, manual-edit preservation,
+  rollback and foreign-key integrity. New fixtures close their database in `afterEach` or `finally`.
+- HTTP integration: real Fastify route handlers and SQLite via `inject`, including category merge,
+  budget replacement, event tagging, manual/planned transaction lifecycle, insurance uploads and
+  downloads, pension reports and manual holdings. No actual network is needed.
+- External adapters: deterministic mock responses for BOI, Yahoo and categorization. The scraper
+  adapter is mocked, not the ingest repository. OTP/job tests control completion and failures.
+- Data chat: real subprocess tests for MCP SELECT-only SQL, API allowlisting and file-read guard
+  symlink containment. SSE tests control the CLI process without invoking a paid model.
+- Browser E2E: Hebrew UI manual-expense create/edit/delete, persistence after reload, settings through
+  Vite's actual proxy and smoke tests of seven empty-household screens. Third-party browser requests
+  are blocked. E2E is deliberately serial because the flows share one disposable database.
+
+## Coverage scope
+
+`vitest.config.ts` includes every `src/**/*.ts` file, including unloaded files, and the web transport
+and formatting helpers. Only the synthetic demo generator is excluded. React pages/components and
+`guard-read.mjs` are not part of the V8 percentage; browser flows and subprocess tests exercise them
+separately. Subprocess coverage is not merged, so MCP and server entry points still show zero in
+this report even though they are exercised through their real process boundaries.
+
+Measured with Node 22 and Vitest 4.1.11, using the same include/exclude scope before and after:
+
+| Metric | Original 48 tests | Expanded suite |
+| --- | ---: | ---: |
+| Statements | 41.16% | 86.83% |
+| Lines | 42.53% | 89.19% |
+| Functions | 42.57% | 88.05% |
+| Branches | 36.31% | 76.09% |
+
+Coverage gates are 85% statements, lines and functions, and 75% branches. The target is not a claim
+of 85% branch coverage or whole-React-app coverage. HTML, LCOV and JSON summary output is generated
+under `coverage/` for inspection. The real-bank browser login, live OTP behavior and external service
+availability remain unverified; mocked adapter tests do not prove those services work live.
+
+## Confirmed defects
+
+`tests/known-bugs.test.ts` contains four explicit `it.fails` regressions. They assert the desired
+behavior and currently fail for the right reason. Vitest labels them **expected fail**, not ordinary
+passing tests. If a production fix makes an assertion pass, Vitest fails the expected-failure test
+until `.fails` is removed. No production logic was changed in this test-only work.
+
+1. Pension re-import duplicates a deposit whose `salary_month` is NULL. SQLite's unique constraint
+   does not treat two NULLs as equal, so `ON CONFLICT` never updates that row.
+2. Net worth history uses `MAX(id)` for snapshots rather than newest date. Inserting an older
+   backfilled snapshot after a newer one changes month-end history incorrectly, even though the
+   current net worth item still uses the right date.
+3. Manual transaction validation accepts impossible dates such as 2026-02-31 and normalizes them
+   into March instead of returning 400.
+4. Postponing a planned expense dated January 31 by one month uses `setUTCMonth`, rolling into
+   March rather than clamping to February's last day.
+
+These are separate follow-up fixes. Do not replace the desired assertions with the buggy results
+just to make the suite green.
