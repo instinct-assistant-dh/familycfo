@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  globalTeardown: './tests/e2e/teardown.ts',
   fullyParallel: false,
   workers: 1, // flows share one throwaway database, never the user's household
   retries: process.env.CI ? 1 : 0,

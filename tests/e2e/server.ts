@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -6,6 +6,8 @@ import { openDb } from '../../src/db/connection.js';
 
 // Each run gets an empty, migrated household. No real credentials, documents or DB are read.
 const dir = mkdtempSync(join(tmpdir(), 'familycfo-e2e-'));
+mkdirSync('test-results', { recursive: true });
+writeFileSync('test-results/e2e-directory.txt', dir);
 const path = join(dir, 'household.db');
 const db = openDb(path);
 db.prepare("UPDATE members SET name = 'Test member' WHERE id = 1").run();
