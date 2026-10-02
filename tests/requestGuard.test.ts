@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import { isLoopbackHost, isLoopbackOrigin, registerRequestGuard } from '../src/server/requestGuard.js';
 
@@ -33,7 +33,7 @@ describe('request guard: Host header (DNS rebinding)', () => {
 
   it('rejects a Host with userinfo or other tricks', async () => {
     const app = setup();
-    for (const h of ['127.0.0.1@evil.example', 'evil.example#127.0.0.1', 'evil.example/127.0.0.1']) {
+    for (const h of ['127.0.0.1@evil.example', 'evil.example#127.0.0.1', 'evil.example/127.0.0.1', '127.1', 'evil@127.0.0.1', '127.0.0.1:4310/x', 'localhost:0', 'localhost:65536', 'localhost:4310\n']) {
       const res = await app.inject({ method: 'GET', url: '/api/data', headers: { host: h } });
       expect(res.statusCode, h).toBe(403);
     }
@@ -52,7 +52,7 @@ describe('request guard: Origin and content type (cross-site writes)', () => {
 
   it('rejects the opaque and malformed origins, and a https page pretending to be local', async () => {
     const app = setup();
-    for (const origin of ['null', 'not a url', 'https://127.0.0.1:4310', 'http://127.0.0.1.evil.example']) {
+    for (const origin of ['null', 'not a url', 'https://127.0.0.1:4310', 'http://127.0.0.1.evil.example', 'http://evil@127.0.0.1', 'http://127.1', 'http://localhost:5180/', 'http://localhost:5180/x', 'http://localhost:5180?x=1', 'http://localhost:5180#x']) {
       const res = await app.inject({ method: 'POST', url: '/api/scrape', headers: { ...host, origin } });
       expect(res.statusCode, origin).toBe(403);
     }
@@ -94,11 +94,13 @@ describe('loopback helpers', () => {
 
 describe('request guard with the real insurance upload route', () => {
   it('still accepts a PDF upload from the web UI, and the file is stored owner-only', async () => {
-    const { mkdtempSync, statSync } = await import('fs');
+    const { mkdtempSync, statSync, rmSync } = await import('fs');
     const { tmpdir } = await import('os');
     const { join } = await import('path');
     const dir = mkdtempSync(join(tmpdir(), 'cfo-ins-'));
-    process.env.POLICIES_DIR = join(dir, 'policies');
+    vi.stubEnv('POLICIES_DIR', join(dir, 'policies'));
+    vi.resetModules();
+    try {
     const { insuranceRoutes } = await import('../src/server/routes/insurance.js');
     const { testDb } = await import('./helpers.js');
     const db = testDb();
@@ -112,5 +114,31 @@ describe('request guard with the real insurance upload route', () => {
     const bad = await app.inject({ method: 'POST', url, headers: { ...host, origin: 'https://evil.example', 'content-type': 'application/pdf' }, payload: Buffer.from('%PDF-1.4') });
     expect(bad.statusCode).toBe(403);
     if (process.platform !== 'win32') expect(statSync(join(dir, 'policies', String(policyId))).mode & 0o777).toBe(0o700);
+    await app.close();
+    db.close();
+    } finally { vi.unstubAllEnvs(); vi.resetModules(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+// Import through the real entry point: no listen(), getDb(), or production data access.
+describe('production buildApp guard registration', () => {
+  it('blocks foreign hosts on every real route module, before handlers run', async () => {
+    const { buildApp } = await import('../src/server/index.js');
+    const { testDb } = await import('./helpers.js');
+    const db = testDb();
+    const app = buildApp(db);
+    try {
+      for (const url of ['/api/members', '/api/meta', '/api/transactions', '/api/cashflow',
+        '/api/events', '/api/categories', '/api/insurance', '/api/pension', '/api/investments']) {
+        // A 404 would also be guarded, so prove the route exists independently.
+        expect(app.hasRoute({ method: 'GET', url }), url).toBe(true);
+        const res = await app.inject({ method: 'GET', url, headers: { host: 'foreign.example' } });
+        expect(res.statusCode, url).toBe(403);
+        expect(res.json()).toEqual({ error: 'forbidden host' });
+      }
+      expect(app.hasRoute({ method: 'POST', url: '/api/agent/chat' })).toBe(true);
+      expect((await app.inject({ method: 'POST', url: '/api/agent/chat', headers: { host: 'foreign.example' }, payload: { message: 'test' } })).statusCode).toBe(403);
+      expect((await app.inject({ method: 'GET', url: '/api/meta', headers: host })).statusCode).toBe(200);
+    } finally { await app.close(); db.close(); }
   });
 });
