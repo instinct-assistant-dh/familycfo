@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DB } from '../src/db/connection.js';
 import { importPensionReport } from '../src/import/pensionReport.js';
 import { netWorth } from '../src/analytics/networth.js';
@@ -67,7 +67,12 @@ describe('regressions for four fixed defects', () => {
       const ins = old.prepare('INSERT INTO asset_deposits (asset_id, value_date, salary_month, total) VALUES (?, ?, ?, ?)');
       ins.run(asset, '2026-08-01', null, 1); ins.run(asset, '2026-08-01', null, 2); ins.run(asset, '2026-08-01', null, 3);
       ins.run(asset, '2026-08-01', '2026-07', 4); ins.run(asset, '2026-07-01', null, 5);
-      const m15 = migrations.find(m => m.version === 15)!; m15.up(old);
+      const log = vi.spyOn(console, 'info').mockImplementation(() => {});
+      try {
+        const m15 = migrations.find(m => m.version === 15)!; old.transaction(() => m15.up(old))();
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('removed 2 duplicates'));
+        expect(old.prepare('SELECT total FROM asset_deposits_dedup_backup_v15 ORDER BY total').pluck().all()).toEqual([1, 2]);
+      } finally { log.mockRestore(); }
       expect(old.prepare('SELECT total FROM asset_deposits ORDER BY total').pluck().all()).toEqual([3, 4, 5]);
       expect(() => ins.run(asset, '2026-08-01', null, 9)).toThrow(/UNIQUE/);
       expect(old.pragma('integrity_check', { simple: true })).toBe('ok');
@@ -107,12 +112,12 @@ describe('regressions for four fixed defects', () => {
       expect(db.prepare('SELECT COUNT(*) FROM planned_items').pluck().get()).toBe(0);
     } finally { await app.close(); }
   });
-  it('postpone handles missing items and leaves the date alone for 0 months', async () => {
+  it('postpone returns 404 for missing items and leaves the date alone for 0 months', async () => {
     addAccount(db, 'bank:test', 'bank');
     const id = Number(db.prepare("INSERT INTO planned_items (description, amount, date, account_id) VALUES ('Invented', 100, '2026-03-31', 'bank:test')").run().lastInsertRowid);
     const app = Fastify(); transactionRoutes(app, db);
     try {
-      expect((await app.inject({ method: 'PATCH', url: '/api/planned/9999', payload: { postponeMonths: 1 } })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'PATCH', url: '/api/planned/9999', payload: { postponeMonths: 1 } })).statusCode).toBe(404);
       await app.inject({ method: 'PATCH', url: `/api/planned/${id}`, payload: { postponeMonths: 0 } });
       expect(db.prepare('SELECT date FROM planned_items WHERE id=?').pluck().get(id)).toBe('2026-03-31');
       await app.inject({ method: 'PATCH', url: `/api/planned/${id}`, payload: { postponeMonths: 1 } });
@@ -130,5 +135,41 @@ describe('date helpers', () => {
   it('isCalendarDate accepts only real dates', () => {
     expect(isCalendarDate('2028-02-29')).toBe(true); expect(isCalendarDate('2026-02-29')).toBe(false);
     expect(isCalendarDate(20260101)).toBe(false); expect(isCalendarDate(undefined)).toBe(false);
+  });
+});
+
+describe('planned PATCH validation', () => {
+  it.each(['abc', '1', 1.5, 1e9, -121, 121, null, true])('rejects invalid offset %s without changing status or date', async offset => {
+    addAccount(db, 'bank:test', 'bank');
+    const id = Number(db.prepare("INSERT INTO planned_items (description, amount, date, account_id) VALUES ('Invented', 100, '2026-01-31', 'bank:test')").run().lastInsertRowid);
+    const app = Fastify(); transactionRoutes(app, db);
+    try {
+      const response = await app.inject({ method: 'PATCH', url: `/api/planned/${id}`, payload: { status: 'cancelled', postponeMonths: offset } });
+      expect(response.statusCode).toBe(400);
+      expect(db.prepare('SELECT date,status FROM planned_items WHERE id=?').get(id)).toEqual({date: '2026-01-31', status: 'planned'});
+    } finally { await app.close(); }
+  });
+  it.each([{ status: 'cancelled' }, { status: 'planned' }, { postponeMonths: 0 }])('returns 404 for missing item %j', async payload => {
+    const app = Fastify(); transactionRoutes(app, db);
+    try { expect((await app.inject({ method: 'PATCH', url: '/api/planned/9999', payload })).statusCode).toBe(404); }
+    finally { await app.close(); }
+  });
+  it.each(['broken', '2200-12-31', '1900-01-01'])('rejects invalid stored or out-of-range result %s', async date => {
+    addAccount(db, 'bank:test', 'bank');
+    const id = Number(db.prepare("INSERT INTO planned_items (description, amount, date, account_id) VALUES ('Invented', 100, ?, 'bank:test')").run(date).lastInsertRowid);
+    const app = Fastify(); transactionRoutes(app, db);
+    try {
+      const response = await app.inject({ method: 'PATCH', url: `/api/planned/${id}`, payload: { status: 'cancelled', postponeMonths: date.startsWith('1900') ? -1 : 1 } });
+      expect(response.statusCode).toBe(400);
+      expect(db.prepare('SELECT date,status FROM planned_items WHERE id=?').get(id)).toEqual({date, status: 'planned'});
+    } finally { await app.close(); }
+  });
+  it('helper rejects unsafe offsets and unsupported calendar dates', () => {
+    for (const n of [NaN, Infinity, 1.5, 1e9, -121]) expect(() => addMonthsClamped('2026-01-01', n)).toThrow(RangeError);
+    for (const d of ['0099-01-01', '0000-01-01', '1899-12-31', '2201-01-01', '2026-02-31']) {
+      expect(isCalendarDate(d)).toBe(false); expect(() => addMonthsClamped(d, 1)).toThrow(RangeError);
+    }
+    expect(addMonthsClamped('2026-01-01', 120)).toBe('2036-01-01');
+    expect(addMonthsClamped('2026-01-01', -120)).toBe('2016-01-01');
   });
 });
