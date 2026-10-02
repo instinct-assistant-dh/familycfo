@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { mkdirPrivate } from '../permissions.js';
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -79,7 +80,7 @@ export function agentRoutes(app: FastifyInstance, db: DB): void {
     if (!message?.trim()) return reply.code(400).send({ error: 'message is required' });
     if (sessionId && !/^[\w-]{8,64}$/.test(sessionId)) return reply.code(400).send({ error: 'bad sessionId' });
 
-    mkdirSync(WORKDIR, { recursive: true });
+    mkdirPrivate(WORKDIR); // holds copies of the policy files
     syncAgentFiles();
     const mcpConfig = {
       mcpServers: {

@@ -10,13 +10,18 @@ import { insuranceRoutes } from './routes/insurance.js';
 import { pensionRoutes } from './routes/pension.js';
 import { investmentRoutes } from './routes/investments.js';
 import { setRate } from '../analytics/fx.js';
+import { registerRequestGuard } from './requestGuard.js';
+import { warnBroadPermissions } from '../permissions.js';
 
 const db = getDb();
+warnBroadPermissions();
 // Local-only: this API exposes the household's full financial data and has no login
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 4310);
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'warn' } });
+// Host / Origin checks against DNS rebinding and cross-site writes; before the routes so it covers all of them
+registerRequestGuard(app);
 
 registerCrud(app, db, { table: 'members', path: 'members', columns: ['name', 'color'], allowDelete: false });
 registerCrud(app, db, {
