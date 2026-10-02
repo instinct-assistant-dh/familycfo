@@ -102,10 +102,11 @@ describe.skipIf(!posix)('owner-only files', () => {
     const cwd = process.cwd();
     process.chdir(dir);
     try {
-      vi.stubEnv('BANK_DB', join(dir, 'bank.db'));
+      const bankPath = join(dir, 'bank.db');
+      vi.stubEnv('BANK_DB', bankPath);
       vi.stubEnv('POLICIES_DIR', join(dir, 'policies'));
       vi.stubEnv('REPORTS_DIR', join(dir, 'reports'));
-      writeFileSync(process.env.BANK_DB, ''); chmodSync(process.env.BANK_DB, 0o600);
+      writeFileSync(bankPath, ''); chmodSync(bankPath, 0o600);
       const lines: string[] = [];
       const warnings = warnBroadPermissions(m => lines.push(m));
       expect(warnings.length).toBe(1);
