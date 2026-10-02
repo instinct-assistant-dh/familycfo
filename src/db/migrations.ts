@@ -633,6 +633,17 @@ export const migrations: Migration[] = [
       for (const [from, to] of Object.entries(SCRAPER_CATEGORY_ALIASES)) alias.run(from, to);
     },
   },
+  {
+    version: 15,
+    name: 'deposits: unknown salary month is unique too',
+    up(db) {
+      // UNIQUE (asset_id, value_date, salary_month) treats NULLs as distinct, so a re-import added the same deposit again.
+      // Keep the newest row of each duplicate group (the latest import wins), then enforce it with an expression index.
+      db.exec(`DELETE FROM asset_deposits WHERE salary_month IS NULL AND id NOT IN (
+        SELECT MAX(id) FROM asset_deposits WHERE salary_month IS NULL GROUP BY asset_id, value_date)`);
+      db.exec(`CREATE UNIQUE INDEX idx_asset_deposits_unique ON asset_deposits (asset_id, value_date, COALESCE(salary_month, ''))`);
+    },
+  },
 ];
 
 type CategoryKind = 'expense' | 'income' | 'transfer' | 'card_payment' | 'savings';
