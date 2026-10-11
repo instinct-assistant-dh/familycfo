@@ -40,6 +40,15 @@ running it.
 - The data chat runs your own Claude Code CLI with only read access to the database and to `data/`. What it reads is
   sent to Anthropic under your account to answer you.
 
+## Known residual risks
+
+- `npm audit` on the root package still reports advisories in the Puppeteer dependency chain (`basic-ftp`,
+  `extract-zip`, `proxy-agent`). They are only reachable through Puppeteer's own browser download and proxy
+  features, which this app does not use with untrusted input. Fixing them needs a major Puppeteer upgrade, which
+  should be tested on its own against the bank scrapers. The web app has no audit findings.
+- The SQLite database is not encrypted at rest. Use full-disk encryption (FileVault, BitLocker, LUKS). Database
+  encryption (SQLCipher) is planned as a separate change.
+
 ## Reporting a vulnerability
 
 Please don't open a public issue for a security problem. Use GitHub's private vulnerability reporting
