@@ -27,6 +27,21 @@ const MAX_FILE = 40 * 1024 * 1024;
 type Row = Record<string, any>;
 
 /** Keep the name readable (Hebrew too) but safe as a file name. */
+/** The file really is what its Content-Type says (a PDF or image), judged by its first bytes. */
+export function matchesMime(mime: string, body: Buffer): boolean {
+  const at = (offset: number, bytes: number[]) => bytes.every((b, i) => body[offset + i] === b);
+  switch (mime) {
+    case 'application/pdf': return at(0, [0x25, 0x50, 0x44, 0x46, 0x2d]); // %PDF-
+    case 'image/png': return at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    case 'image/jpeg': return at(0, [0xff, 0xd8, 0xff]);
+    case 'image/webp': return at(0, [0x52, 0x49, 0x46, 0x46]) && at(8, [0x57, 0x45, 0x42, 0x50]); // RIFF....WEBP
+    default: return false;
+  }
+}
+
+/** A display name without control characters, at most 200 characters. */
+const cleanOriginalName = (name: string) => name.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200);
+
 const safeName = (name: string) => name.replace(/\.[^.]+$/, '').replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80) || 'document';
 
 /** Insurance-looking charges of the last year: by category ("ביטוח…") or by a policy's pattern. */
@@ -149,7 +164,8 @@ export function insuranceRoutes(app: FastifyInstance, db: DB): void {
     if (!db.prepare(`SELECT 1 FROM insurance_policies WHERE id = ?`).get(policyId)) return reply.code(404).send({ error: 'policy not found' });
     if (!MIME_EXT[mime]) return reply.code(415).send({ error: 'only PDF or image files' });
     if (!Buffer.isBuffer(body) || !body.length) return reply.code(400).send({ error: 'empty file' });
-    const original = String(q.name ?? `document.${MIME_EXT[mime]}`);
+    if (!matchesMime(mime, body)) return reply.code(415).send({ error: 'the file content does not match its type' });
+    const original = cleanOriginalName(String(q.name ?? '')) || `document.${MIME_EXT[mime]}`;
     const kind = DOC_KINDS.includes(String(q.kind)) ? String(q.kind) : 'policy';
 
     const res = db.prepare(`INSERT INTO insurance_documents (policy_id, file_name, original_name, mime, size, kind) VALUES (?, '', ?, ?, ?, ?)`)

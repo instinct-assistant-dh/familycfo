@@ -18,7 +18,7 @@ npm run demo       # Build demo.db with made-up data; npm run dev:demo runs the 
 
 Israeli bank scraper + local household-finance app for a family (members are configurable in Settings). Everything runs locally; the API binds to 127.0.0.1 only and has no login.
 
-- `src/scraper.ts` — `israeli-bank-scrapers` (npm release). Fetches 3 months back + 2 future months (upcoming card charges/installments), raw data, and scraper categories. Hapoalim OTP is prompted in the terminal.
+- `src/scraper.ts` — `israeli-bank-scrapers` (npm release). Fetches 3 months back + 2 future months (upcoming card charges/installments) and scraper categories (raw bank payloads only with `STORE_RAW_TRANSACTIONS=1`). Hapoalim OTP is prompted in the terminal.
 - `src/db/` — `connection.ts` (opens + migrates), `migrations.ts` (numbered, `schema_version`), `ingestRepo.ts` (saves scraped accounts; never overwrites user-edited fields).
 - `src/ingest/` — `normalize.ts` (identity: bank reference + installment number, else legacy md5 + an occurrence suffix so identical same-day purchases are kept), `classify.ts` (rules → description cache → scraper category → external API; derives `kind`), `transfers.ts` (card-bill reconciliation, own-account transfer pairing).
 - `src/analytics/` — pure functions over `loadTransactions()` in `common.ts`: cash flow, budgets, recurring detection, scheduled-item suggestions, day-by-day forecast per bank account, card charges & installments, paybacks (Bit/refund links), savings capacity & tight-month plan, net worth (FX via Bank of Israel), alerts, recommendations.
@@ -42,7 +42,7 @@ Israeli bank scraper + local household-finance app for a family (members are con
 - Hebrew regexes can't use `\b` (JS word boundaries are ASCII-only) — use explicit lookaheads.
 
 **Configuration:**
-- Bank logins: copy `accounts.example.json` to `accounts.json` (git-ignored; `ACCOUNTS_FILE` overrides the path) — `accounts[]` with `companyId` (an israeli-bank-scrapers company id) and `credentials`; optional `categoryApiUrl` (POST `{description}` → `{category}`).
+- Bank logins: copy `accounts.example.json` to `accounts.json` (git-ignored; `ACCOUNTS_FILE` overrides the path), then `npm run secrets:encrypt` turns it into `accounts.enc.json` (AES-256-GCM, passphrase from `FAMILYCFO_PASSPHRASE_FILE` / `FAMILYCFO_PASSPHRASE` / a terminal prompt; `src/secrets.ts`, `src/config.ts`; the encrypted file wins) — `accounts[]` with `companyId` (an israeli-bank-scrapers company id) and `credentials`; optional `categoryApiUrl` (POST `{description}` → `{category}`).
 - Ports: `PORT` (API, 4310) and `WEB_PORT` (web, 5180).
 
 **Database:**

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, lstatSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
-import { ACCOUNTS_FILE } from './config.js';
+import { ACCOUNTS_FILE, ENCRYPTED_ACCOUNTS_FILE } from './config.js';
 
 /** Owner-only: the data here is bank logins and a household's finances. POSIX only (Windows has no such modes). */
 export const PRIVATE_FILE_MODE = 0o600;
@@ -58,7 +58,7 @@ export function broadPermissions(path: string): string | undefined {
 /** The files and folders that hold logins or financial data. */
 export function sensitivePaths(): string[] {
   const db = resolve(process.env.BANK_DB || 'bank.db');
-  return [resolve(ACCOUNTS_FILE), db, `${db}-wal`, `${db}-shm`, resolve('backups'), resolve('data'),
+  return [resolve(ACCOUNTS_FILE), resolve(ENCRYPTED_ACCOUNTS_FILE), db, `${db}-wal`, `${db}-shm`, resolve('backups'), resolve('data'),
     resolve(process.env.POLICIES_DIR ?? 'data/policies'), resolve(process.env.REPORTS_DIR ?? 'data/reports'),
     ...(agentWorkdir ? [agentWorkdir] : [])];
 }

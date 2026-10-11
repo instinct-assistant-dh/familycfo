@@ -13,7 +13,12 @@ import { pensionRoutes } from './routes/pension.js';
 import { investmentRoutes } from './routes/investments.js';
 import { setRate } from '../analytics/fx.js';
 import { registerRequestGuard } from './requestGuard.js';
+import { asObject, badRequest, finiteNumber, integerInRange } from './validate.js';
+import { isCalendarDate } from './routes/transactions.js';
+import { stopAgentChildren } from './agent.js';
 import { warnBroadPermissions } from '../permissions.js';
+import { credentialsAreEncrypted } from '../config.js';
+import { unlockSecrets } from '../secrets.js';
 
 // Local-only: this API exposes the household's full financial data and has no login
 const HOST = '127.0.0.1';
@@ -61,10 +66,13 @@ export function buildApp(db: DB) {
   }));
 
   app.put('/api/settings', async req => {
-    const body = req.body as Record<string, string | number>;
-    const allowed = ['cycle_start_day', 'balance_buffer'];
+    const body = asObject(req.body);
+    // validate everything first so a bad value never leaves the settings half-updated
+    const values: [string, string][] = [];
+    if ('cycle_start_day' in body) values.push(['cycle_start_day', String(integerInRange(body.cycle_start_day, 1, 28, 'cycle_start_day'))]);
+    if ('balance_buffer' in body) values.push(['balance_buffer', String(finiteNumber(body.balance_buffer, 'balance_buffer'))]);
     const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
-    for (const [k, v] of Object.entries(body)) if (allowed.includes(k)) upsert.run(k, String(v));
+    db.transaction(() => { for (const [k, v] of values) upsert.run(k, v); })();
     return { ok: true };
   });
 
@@ -73,8 +81,14 @@ export function buildApp(db: DB) {
     WHERE date = (SELECT MAX(date) FROM fx_rates WHERE currency = f.currency) ORDER BY currency
   `).all());
   app.put('/api/fx', async req => {
-    const b = req.body as { currency: string; rate: number; date?: string };
-    setRate(db, b.date ?? new Date().toISOString().slice(0, 10), b.currency, b.rate);
+    const b = asObject(req.body);
+    const currency = typeof b.currency === 'string' ? b.currency.trim().toUpperCase() : '';
+    if (!/^[A-Z]{3}$/.test(currency)) throw badRequest('currency must be a 3-letter code such as USD');
+    const rate = finiteNumber(b.rate, 'rate');
+    if (rate <= 0) throw badRequest('rate must be greater than zero');
+    const date = b.date ?? new Date().toISOString().slice(0, 10);
+    if (!isCalendarDate(date)) throw badRequest('date must be a real YYYY-MM-DD date');
+    setRate(db, date, currency, rate);
     return { ok: true };
   });
 
@@ -87,17 +101,51 @@ export function buildApp(db: DB) {
   pensionRoutes(app, db);
   investmentRoutes(app, db);
 
-  app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
-    app.log.error(err);
-    reply.code(err.statusCode ?? 500).send({ error: err.message });
+  app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, _req, reply) => {
+    // a constraint failure means the request referred to something that does not exist or clashes: the caller's problem
+    const statusCode = err.statusCode ?? (err.code?.startsWith('SQLITE_CONSTRAINT') ? 409 : 500);
+    if (statusCode >= 500) {
+      // details stay in the log: SQL text, file paths and stack traces must not reach the browser
+      app.log.error(err);
+      return reply.code(statusCode).send({ error: 'internal error' });
+    }
+    return reply.code(statusCode).send({ error: statusCode === 409 && !err.statusCode ? 'the change conflicts with existing data' : err.message });
   });
   return app;
 }
 
+/** Close everything cleanly on Ctrl-C / `kill`: stop chat children, finish requests, checkpoint the WAL. */
+export function installShutdown(app: ReturnType<typeof buildApp>, db: DB, proc: Pick<NodeJS.Process, 'once' | 'exit'> = process): void {
+  let closing = false;
+  const stop = (signal: string) => {
+    if (closing) return;
+    closing = true;
+    console.log(`${signal} received, shutting down`);
+    stopAgentChildren();
+    app.close().catch(err => console.error('Shutdown error:', err)).finally(() => {
+      try { db.close(); } catch (err) { console.error('Database close error:', err); }
+      proc.exit(0);
+    });
+  };
+  proc.once('SIGINT', () => stop('SIGINT'));
+  proc.once('SIGTERM', () => stop('SIGTERM'));
+}
+
 // Importing buildApp in tests must not start a server or touch the household database.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const app = buildApp(getDb());
+  // an encrypted logins file needs its passphrase now (a prompt on a terminal), not in the middle of a scrape
+  if (credentialsAreEncrypted()) {
+    try { await unlockSecrets(); } catch (err) { console.warn(`WARNING: ${(err as Error).message} Scraping from the app stays disabled until then.`); }
+  }
+  const db = getDb();
+  const app = buildApp(db);
   warnBroadPermissions();
-  await app.listen({ host: HOST, port: PORT });
+  installShutdown(app, db);
+  try {
+    await app.listen({ host: HOST, port: PORT });
+  } catch (err) {
+    console.error(`Could not start the API on ${HOST}:${PORT}: ${(err as Error).message}`);
+    process.exit(1);
+  }
   console.log(`Household API on http://${HOST}:${PORT}`);
 }

@@ -38,7 +38,7 @@ describe('scraper orchestration without real bank access', () => {
   it('passes backfill/headless options and future separate installments to the adapter', async () => {
     vi.stubEnv('SCRAPE_FROM', '2026-01-01'); vi.stubEnv('SHOW_BROWSER', '0'); vi.stubEnv('SCRAPE_ONLY', ' leumi , ');
     scrape.mockResolvedValue({ success: true }); await scrapeAll(config, db);
-    expect(createScraper).toHaveBeenCalledOnce(); expect(createScraper.mock.calls[0][0]).toMatchObject({ companyId: 'leumi', showBrowser: false, futureMonthsToScrape: 2, combineInstallments: false, includeRawTransaction: true });
+    expect(createScraper).toHaveBeenCalledOnce(); expect(createScraper.mock.calls[0][0]).toMatchObject({ companyId: 'leumi', showBrowser: false, futureMonthsToScrape: 2, combineInstallments: false, includeRawTransaction: false });
     expect(createScraper.mock.calls[0][0].startDate.getFullYear()).toBe(2026);
     expect(createScraper.mock.calls[0][0].startDate.getMonth()).toBe(0);
   });

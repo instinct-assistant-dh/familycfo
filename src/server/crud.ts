@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { DB } from '../db/connection.js';
+import { asObject, assertScalar } from './validate.js';
 
 interface CrudSpec {
   table: string;
@@ -19,12 +20,16 @@ export function toApi<T extends Record<string, unknown>>(row: T): Record<string,
   return Object.fromEntries(Object.entries(row).map(([k, v]) => [camel(k), v]));
 }
 
-/** Pick allowed fields from a camelCase body and return snake_case column → value. */
-export function pickColumns(body: Record<string, unknown>, columns: string[]): Record<string, unknown> {
+/** Pick allowed fields from a camelCase JSON body (400 unless it is an object of plain values) and return snake_case column → value. */
+export function pickColumns(rawBody: unknown, columns: string[]): Record<string, unknown> {
+  const body = asObject(rawBody);
   const out: Record<string, unknown> = {};
   for (const col of columns) {
     const key = camel(col);
-    if (key in body) out[col] = body[key] === '' ? null : body[key];
+    if (key in body) {
+      assertScalar(key, body[key]);
+      out[col] = body[key] === '' ? null : body[key];
+    }
   }
   return out;
 }

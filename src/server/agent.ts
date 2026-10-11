@@ -4,6 +4,8 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import type { FastifyInstance } from 'fastify';
 import type { DB } from '../db/connection.js';
+import { SECURITY_HEADERS } from './requestGuard.js';
+import type { ChildProcess } from 'child_process';
 import { cycleStartDay, today } from '../analytics/common.js';
 import { POLICIES_DIR, REPORTS_DIR } from './routes/insurance.js';
 
@@ -69,14 +71,30 @@ function claudeEnv(): NodeJS.ProcessEnv {
   // the API may itself be started from a Claude Code session
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
+  // the chat's process tree must never see the passphrase of the bank logins
+  delete env.FAMILYCFO_PASSPHRASE;
+  delete env.FAMILYCFO_PASSPHRASE_FILE;
   return env;
+}
+
+/** Limits so one browser tab (or a script) cannot pile up `claude` processes or feed them unbounded text. */
+export const MAX_CHAT_CHARS = 20_000;
+export const MAX_CONCURRENT_CHATS = 2;
+export const CHAT_TIMEOUT_MS = 10 * 60_000;
+const running = new Set<ChildProcess>();
+
+/** Stop every running chat (server shutdown). */
+export function stopAgentChildren(): void {
+  for (const child of running) if (child.exitCode == null) child.kill('SIGTERM');
 }
 
 export function agentRoutes(app: FastifyInstance, db: DB): void {
   app.post('/api/agent/chat', async (req, reply) => {
-    const { message, sessionId } = (req.body ?? {}) as { message?: string; sessionId?: string };
-    if (!message?.trim()) return reply.code(400).send({ error: 'message is required' });
-    if (sessionId && !/^[\w-]{8,64}$/.test(sessionId)) return reply.code(400).send({ error: 'bad sessionId' });
+    const { message, sessionId } = (req.body ?? {}) as { message?: unknown; sessionId?: string };
+    if (typeof message !== 'string' || !message.trim()) return reply.code(400).send({ error: 'message is required' });
+    if (message.length > MAX_CHAT_CHARS) return reply.code(413).send({ error: `message is too long (max ${MAX_CHAT_CHARS} characters)` });
+    if (running.size >= MAX_CONCURRENT_CHATS) return reply.code(429).send({ error: 'the assistant is busy with other questions; try again in a moment' });
+    if (sessionId !== undefined && (typeof sessionId !== 'string' || !/^[\w-]{8,64}$/.test(sessionId))) return reply.code(400).send({ error: 'bad sessionId' });
 
     const WORKDIR = getAgentWorkdir(); // unique, owner-only, checked before every copy
     syncAgentFiles(WORKDIR);
@@ -105,10 +123,16 @@ export function agentRoutes(app: FastifyInstance, db: DB): void {
       ...(sessionId ? ['--resume', sessionId] : []),
     ];
     const child = spawn('claude', args, { cwd: WORKDIR, env: claudeEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+    running.add(child);
+    const timer = setTimeout(() => { if (child.exitCode == null) child.kill('SIGTERM'); }, CHAT_TIMEOUT_MS);
+    timer.unref?.();
+    const release = () => { clearTimeout(timer); running.delete(child); };
+    child.once('close', release);
+    child.once('error', release);
     child.stdin.end(message);
 
     reply.hijack();
-    reply.raw.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    reply.raw.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
     const emit = (event: object) => reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     // the browser went away (closed the drawer, new chat) — stop the agent
     reply.raw.on('close', () => { if (child.exitCode == null) child.kill('SIGTERM'); });

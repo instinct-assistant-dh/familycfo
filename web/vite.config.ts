@@ -11,6 +11,13 @@ export default defineConfig({
     host: '127.0.0.1',
     port: Number(process.env.WEB_PORT ?? 5180),
     strictPort: true,
+    // the UI must not be framed by another site (clickjacking), sniffed or leak its address in a Referer
+    headers: {
+      'X-Frame-Options': 'DENY',
+      'Content-Security-Policy': "frame-ancestors 'none'",
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+    },
     proxy: { '/api': `http://127.0.0.1:${process.env.PORT ?? 4310}` },
   },
 });

@@ -15,6 +15,10 @@ export function openDb(path = process.env.BANK_DB || 'bank.db'): DB {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  // wait for a competing connection (the data chat reads while the app writes) instead of failing at once
+  db.pragma('busy_timeout = 5000');
+  // freed pages are overwritten, so deleted finance rows do not linger in the file
+  db.pragma('secure_delete = ON');
   runMigrations(db);
   if (onDisk) for (const p of [path, `${path}-wal`, `${path}-shm`]) chmodPrivate(p);
   return db;

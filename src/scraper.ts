@@ -150,7 +150,8 @@ async function describePage(page: Page): Promise<string> {
   for (const frame of page.frames()) {
     try {
       const text = await frame.evaluate(() => document.body?.innerText ?? '');
-      const compact = text.replace(/\s+/g, ' ').trim().slice(0, 800);
+      // long digit runs (account / card / id numbers) are masked: this goes to the terminal and to log files
+      const compact = text.replace(/\s+/g, ' ').replace(/\d{5,}/g, '#####').trim().slice(0, 800);
       if (compact) lines.push(`  Visible text [${frame.url().slice(0, 80)}]: ${compact}`);
     } catch {
       // frame detached mid-navigation; skip it
@@ -190,7 +191,8 @@ export async function scrapeAll(config: Config, db: DB = getDb(), hooks: ScrapeH
         futureMonthsToScrape: 2, // upcoming card charges and future installments
         // per-transaction detail requests (e.g. Isracard PirteyIska_204) get rate-limited (HTTP 429) as automation
         additionalTransactionInformation: false,
-        includeRawTransaction: true,
+        // the full bank payload is never read by the app: keep it off unless STORE_RAW_TRANSACTIONS=1
+        includeRawTransaction: process.env.STORE_RAW_TRANSACTIONS === '1',
         verbose: true,
         combineInstallments: false,
         showBrowser: process.env.SHOW_BROWSER !== '0',

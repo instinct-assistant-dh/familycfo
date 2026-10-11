@@ -8,7 +8,7 @@ import { testDb } from './helpers.js';
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), cpSync: vi.fn(), mkdirSync: vi.fn(), rmSync: vi.fn(), writeFileSync: vi.fn(), existsSync: vi.fn(() => false) }));
 vi.mock('child_process', () => ({ spawn: mocks.spawn }));
 vi.mock('fs', async importOriginal => ({ ...await importOriginal<typeof import('fs')>(), cpSync: mocks.cpSync, mkdirSync: mocks.mkdirSync, rmSync: mocks.rmSync, writeFileSync: mocks.writeFileSync, existsSync: mocks.existsSync }));
-import { agentRoutes } from '../src/server/agent.js';
+import { agentRoutes, CHAT_TIMEOUT_MS, MAX_CHAT_CHARS, MAX_CONCURRENT_CHATS, stopAgentChildren } from '../src/server/agent.js';
 let db: DB; let app: FastifyInstance;
 beforeEach(() => { vi.clearAllMocks(); db = testDb(); app = Fastify(); agentRoutes(app, db); });
 afterEach(async () => { await app.close(); db.close(); vi.unstubAllEnvs(); });
@@ -43,13 +43,13 @@ describe('data chat SSE adapter with a controlled local child process', () => {
     expect(events).toEqual([{ type: 'session', sessionId: 'test-session' }, { type: 'block' }, { type: 'text', text: 'Synthetic result' }, { type: 'tool', name: 'sql', input: { query: 'SELECT 1' } }, { type: 'done', sessionId: 'test-session', error: null }]);
   });
   it('launches only restricted tools, resumes validated sessions and removes API-key environment variables', async () => {
-    vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-do-not-send'); vi.stubEnv('CLAUDECODE', 'synthetic'); vi.stubEnv('CLAUDE_CODE_ENTRYPOINT', 'synthetic');
+    vi.stubEnv('FAMILYCFO_PASSPHRASE_FILE', '/synthetic/pass'); vi.stubEnv('FAMILYCFO_PASSPHRASE', 'synthetic-do-not-send-either'); vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-do-not-send'); vi.stubEnv('CLAUDECODE', 'synthetic'); vi.stubEnv('CLAUDE_CODE_ENTRYPOINT', 'synthetic');
     child([message({ type: 'result', is_error: false })]);
     await app.inject({ method: 'POST', url: '/api/agent/chat', payload });
     const [command, args, options] = mocks.spawn.mock.calls[0];
     expect(command).toBe('claude'); expect(args).toContain('--strict-mcp-config'); expect(args[args.indexOf('--tools') + 1]).toBe('Skill,Read');
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('project'); expect(args.slice(-2)).toEqual(['--resume', 'test-session-123']);
-    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined(); expect(options.env.CLAUDECODE).toBeUndefined(); expect(options.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined(); expect(options.env.FAMILYCFO_PASSPHRASE).toBeUndefined(); expect(options.env.FAMILYCFO_PASSPHRASE_FILE).toBeUndefined(); expect(options.env.CLAUDECODE).toBeUndefined(); expect(options.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
     const settings = JSON.parse(mocks.writeFileSync.mock.calls[0][1]); expect(settings.hooks.PreToolUse[0].matcher).toBe('Read');
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain('guard-read.mjs');
   });
@@ -65,5 +65,46 @@ describe('data chat SSE adapter with a controlled local child process', () => {
     const event = JSON.parse(r.body.replace(/^data: /, '').trim()); expect(event.type).toBe('done'); expect(event.error).toHaveLength(600);
     child([message({ type: 'result', is_error: true, result: 'Synthetic error' })]);
     expect((await app.inject({ method: 'POST', url: '/api/agent/chat', payload })).body).toContain('Synthetic error');
+  });
+});
+
+/** A child that stays running until the test closes it. */
+function hungChild() {
+  const c = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null as number | null, kill: vi.fn() });
+  const finish = () => { c.exitCode = 0; c.emit('close', 0); };
+  return Object.assign(c, { finish });
+}
+
+describe('chat resource limits', () => {
+  it('rejects an oversized or non-text message before launching anything', async () => {
+    const big = await app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'x'.repeat(MAX_CHAT_CHARS + 1) } });
+    expect(big.statusCode).toBe(413);
+    for (const message of [42, { a: 1 }, ['x']]) expect((await app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'ok', sessionId: 12345678 } })).statusCode).toBe(400);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+  it('allows a bounded number of concurrent chats, frees the slot when one ends and stops them all on shutdown', async () => {
+    const kids = Array.from({ length: MAX_CONCURRENT_CHATS }, hungChild);
+    kids.forEach(k => mocks.spawn.mockReturnValueOnce(k));
+    const running = kids.map(() => app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'long question' } }));
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(MAX_CONCURRENT_CHATS));
+    const busy = await app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'one too many' } });
+    expect(busy.statusCode).toBe(429); expect(mocks.spawn).toHaveBeenCalledTimes(MAX_CONCURRENT_CHATS);
+    stopAgentChildren(); for (const k of kids) expect(k.kill).toHaveBeenCalledWith('SIGTERM');
+    kids.forEach(k => k.finish()); await Promise.all(running);
+    const next = hungChild(); mocks.spawn.mockReturnValueOnce(next);
+    const again = app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'now free' } });
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(MAX_CONCURRENT_CHATS + 1)); next.finish(); expect((await again).statusCode).toBe(200);
+  });
+  it('kills a chat that runs past the time limit and sends the security headers on the stream', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const k = hungChild(); mocks.spawn.mockReturnValueOnce(k);
+      const pending = app.inject({ method: 'POST', url: '/api/agent/chat', payload: { message: 'never ends' } });
+      await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(CHAT_TIMEOUT_MS + 1);
+      expect(k.kill).toHaveBeenCalledWith('SIGTERM'); k.finish();
+      const r = await pending; expect(r.headers['x-content-type-options']).toBe('nosniff'); expect(r.headers['cache-control']).toBe('no-store');
+    } finally { vi.useRealTimers(); }
   });
 });

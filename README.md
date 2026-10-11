@@ -67,15 +67,22 @@ It understands how Israeli money actually moves:
 
 - **Everything stays on your machine.** The API binds to `127.0.0.1` only and has **no login** — anyone who can reach
   the port sees everything, so never expose it to a network or the internet.
-- Your bank logins live in `accounts.json` (git-ignored). The database `bank.db`, its backups and imported documents
-  (`data/`) are git-ignored too. **Never commit them.** Prefer full-disk encryption on the computer that runs this.
+- Your bank logins live in `accounts.json` while you set up, then in the **encrypted** `accounts.enc.json`
+  (AES-256-GCM, key from your passphrase; run `npm run secrets:encrypt`, see below). The database `bank.db`, its backups
+  and imported documents (`data/`) are git-ignored too. **Never commit them.** `bank.db` itself is not encrypted:
+  turn on full-disk encryption (FileVault, BitLocker, LUKS) on the computer that runs this.
+- **What leaves your computer.** Only when you use these features: stock symbols go to Yahoo Finance for prices;
+  exchange rates come from the Bank of Israel; each data-chat question and the data it reads go to Anthropic through
+  your own Claude Code login; and, if you set `categoryApiUrl`, every transaction description goes to that URL
+  (`https` required, plain `http` only for `localhost`). The scraper no longer stores the banks' full raw payload
+  (`STORE_RAW_TRANSACTIONS=1` brings it back).
 - **Other websites can't use the API.** It rejects requests whose `Host` is not `127.0.0.1` / `localhost` (DNS
   rebinding) and writes whose `Origin` is not a local page (cross-site POSTs). `curl` and scripts on your machine
   still work. Other programs running as you can still reach the port: the model is one trusted computer.
 - **Owner-only files.** `bank.db` (and its `-wal` / `-shm`), imported documents and the data chat's working copy are
   created readable by you only (`0600` files, `0700` folders). On start the app warns if `accounts.json`, `bank.db`,
   `backups/` or `data/` are readable by other users (fix with `chmod 600` / `chmod 700`); it never changes your files.
-  `accounts.json` still holds the logins in plain text — keep the disk encrypted.
+  A plain `accounts.json` makes every start print a warning until you run `npm run secrets:encrypt`.
 - **The scraper's Chrome keeps its sandbox on.** It starts with a fresh temporary profile each run. Only inside Docker
   or CI, where Chrome cannot create its sandbox, set `CHROME_NO_SANDBOX=1` (the scraper logs a warning).
   On a regular host, run Chrome as a non-root user and check OS sandbox support first (Ubuntu 24.04 AppArmor
@@ -114,6 +121,11 @@ accounts, two cards, a mortgage, savings and a small stock portfolio. Delete `de
    ```bash
    cp accounts.example.json accounts.json
    ```
+
+   Then encrypt it: `npm run secrets:encrypt` asks for a passphrase (12+ characters), writes `accounts.enc.json`
+   (owner-only), checks that it decrypts and removes the plain file. The app reads the passphrase from
+   `FAMILYCFO_PASSPHRASE_FILE` (a `0600` file, for unattended scrapes), `FAMILYCFO_PASSPHRASE`, or asks in the terminal
+   when you start it. Forgetting it means typing your bank logins again.
 
    `accounts.json` lists one entry per bank or card company. `companyId` is a company id of `israeli-bank-scrapers`;
    `credentials` are the fields that company's login needs:
@@ -206,7 +218,10 @@ Both are idempotent — re-running updates, never duplicates. Policy documents c
 |---|---|---|---|
 | Bank logins | `accounts.json` | — | `{ "accounts": [{ "companyId", "credentials" }], "categoryApiUrl"? }` |
 | `categoryApiUrl` | `accounts.json` | none | Optional endpoint for categorizing rows no rule / cache / card category explains: receives `POST {"description"}`, answers `{"category": "<category name>"}`. |
-| `ACCOUNTS_FILE` | env | `accounts.json` | Path of the logins file. |
+| `ACCOUNTS_FILE` | env | `accounts.json` | Path of the plain logins file (setup only). |
+| `ACCOUNTS_ENC_FILE` | env | `accounts.enc.json` | Path of the encrypted logins file; it wins when both exist. |
+| `FAMILYCFO_PASSPHRASE_FILE` / `FAMILYCFO_PASSPHRASE` | env | none (asks in the terminal) | The passphrase of the encrypted logins. Prefer the file (`chmod 600`). |
+| `STORE_RAW_TRANSACTIONS` | env | off | `1` keeps each bank's full raw transaction payload in `transactions.raw_json` (the app never reads it). `npm run db:scrub-raw` clears old ones (irreversible: back up first). |
 | `BANK_DB` | env | `bank.db` | Database file. Use a copy for experiments. |
 | `PORT` / `WEB_PORT` | env | `4310` / `5180` | API and web app ports (both bind to 127.0.0.1). |
 | `SCRAPE_ONLY` | env | all | `SCRAPE_ONLY=isracard,max` scrapes only these companies. |
