@@ -56,6 +56,11 @@ describe('passphrase sources', () => {
     expect(passphraseFromEnvironment({ FAMILYCFO_PASSPHRASE_FILE: file })).toBe(PASS);
     setPassphrase('cached one'); expect(passphraseFromEnvironment({})).toBe('cached one');
   });
+  it('moves a passphrase from the real environment into memory so child processes never inherit it', () => {
+    vi.stubEnv('FAMILYCFO_PASSPHRASE', 'only in memory please');
+    expect(passphraseFromEnvironment()).toBe('only in memory please');
+    expect(process.env.FAMILYCFO_PASSPHRASE).toBeUndefined(); expect(passphraseFromEnvironment()).toBe('only in memory please');
+  });
   it('fails clearly for a missing, empty or world-readable passphrase file', () => {
     expect(() => passphraseFromEnvironment({ FAMILYCFO_PASSPHRASE_FILE: join(dir, 'nope') })).toThrow(/does not exist/);
     const file = join(dir, 'pass'); writeFileSync(file, '\n', { mode: 0o600 });
@@ -120,6 +125,8 @@ describe('loadConfig with encrypted and plain files', () => {
     let message = ''; try { cfg.loadConfig(); } catch (e) { message = (e as Error).message; }
     expect(message).toContain('unknown bank or card company'); expect(message).not.toContain('synthetic-secret-123');
     writeFileSync(plain, JSON.stringify({ accounts: [{ companyId: 'leumi', credentials: { password: 5 } }] }));
+    expect(cfg.loadConfig().accounts[0].credentials).toEqual({ password: '5' });
+    writeFileSync(plain, JSON.stringify({ accounts: [{ companyId: 'leumi', credentials: { password: { x: 1 } } }] }));
     expect(() => cfg.loadConfig()).toThrow(/not a valid configuration/);
     writeFileSync(plain, JSON.stringify({}));
     expect(() => cfg.loadConfig()).toThrow(/accounts/);

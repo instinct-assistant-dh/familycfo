@@ -97,7 +97,15 @@ export function setPassphrase(passphrase: string): void {
 /** The passphrase from the environment or a private file, or undefined when only a prompt can supply it. */
 export function passphraseFromEnvironment(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (cached) return cached;
-  if (env.FAMILYCFO_PASSPHRASE) return env.FAMILYCFO_PASSPHRASE;
+  if (env.FAMILYCFO_PASSPHRASE) {
+    const value = env.FAMILYCFO_PASSPHRASE;
+    if (env === process.env) {
+      // keep it in memory only: child processes (Chrome, the chat's `claude`) inherit the environment
+      cached = value;
+      delete process.env.FAMILYCFO_PASSPHRASE;
+    }
+    return value;
+  }
   const file = env.FAMILYCFO_PASSPHRASE_FILE;
   if (!file) return undefined;
   if (!existsSync(file)) throw new SecretsError(`FAMILYCFO_PASSPHRASE_FILE does not exist: ${file}`);

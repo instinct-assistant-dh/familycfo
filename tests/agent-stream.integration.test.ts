@@ -43,13 +43,13 @@ describe('data chat SSE adapter with a controlled local child process', () => {
     expect(events).toEqual([{ type: 'session', sessionId: 'test-session' }, { type: 'block' }, { type: 'text', text: 'Synthetic result' }, { type: 'tool', name: 'sql', input: { query: 'SELECT 1' } }, { type: 'done', sessionId: 'test-session', error: null }]);
   });
   it('launches only restricted tools, resumes validated sessions and removes API-key environment variables', async () => {
-    vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-do-not-send'); vi.stubEnv('CLAUDECODE', 'synthetic'); vi.stubEnv('CLAUDE_CODE_ENTRYPOINT', 'synthetic');
+    vi.stubEnv('FAMILYCFO_PASSPHRASE_FILE', '/synthetic/pass'); vi.stubEnv('FAMILYCFO_PASSPHRASE', 'synthetic-do-not-send-either'); vi.stubEnv('ANTHROPIC_API_KEY', 'synthetic-do-not-send'); vi.stubEnv('CLAUDECODE', 'synthetic'); vi.stubEnv('CLAUDE_CODE_ENTRYPOINT', 'synthetic');
     child([message({ type: 'result', is_error: false })]);
     await app.inject({ method: 'POST', url: '/api/agent/chat', payload });
     const [command, args, options] = mocks.spawn.mock.calls[0];
     expect(command).toBe('claude'); expect(args).toContain('--strict-mcp-config'); expect(args[args.indexOf('--tools') + 1]).toBe('Skill,Read');
     expect(args[args.indexOf('--setting-sources') + 1]).toBe('project'); expect(args.slice(-2)).toEqual(['--resume', 'test-session-123']);
-    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined(); expect(options.env.CLAUDECODE).toBeUndefined(); expect(options.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    expect(options.env.ANTHROPIC_API_KEY).toBeUndefined(); expect(options.env.FAMILYCFO_PASSPHRASE).toBeUndefined(); expect(options.env.FAMILYCFO_PASSPHRASE_FILE).toBeUndefined(); expect(options.env.CLAUDECODE).toBeUndefined(); expect(options.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
     const settings = JSON.parse(mocks.writeFileSync.mock.calls[0][1]); expect(settings.hooks.PreToolUse[0].matcher).toBe('Read');
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain('guard-read.mjs');
   });

@@ -71,6 +71,9 @@ function claudeEnv(): NodeJS.ProcessEnv {
   // the API may itself be started from a Claude Code session
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
+  // the chat's process tree must never see the passphrase of the bank logins
+  delete env.FAMILYCFO_PASSPHRASE;
+  delete env.FAMILYCFO_PASSPHRASE_FILE;
   return env;
 }
 

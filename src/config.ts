@@ -25,7 +25,8 @@ export function assertSafeCategoryUrl(value: string): string {
 const configSchema = z.object({
   accounts: z.array(z.object({
     companyId: z.string().refine(id => Object.prototype.hasOwnProperty.call(CompanyTypes, id), id => ({ message: `unknown bank or card company "${id}"` })),
-    credentials: z.record(z.string()),
+    // numbers typed without quotes (a card's last digits, an id) still work: the scraper wants text
+    credentials: z.record(z.union([z.string(), z.number()]).transform(String)),
   })),
   categoryApiUrl: z.string().refine(v => { try { assertSafeCategoryUrl(v); return true; } catch { return false; } },
     { message: 'must be an https URL (http only for localhost) without a username or password' }).optional(),
