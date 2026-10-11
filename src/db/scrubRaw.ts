@@ -7,9 +7,9 @@ import { getDb, type DB } from './connection.js';
  * not left behind. Returns the number of rows cleared.
  */
 export function scrubRawTransactions(db: DB): number {
+  db.pragma('secure_delete = ON'); // before the UPDATE, so the old payload bytes are overwritten, not just unlinked
   const { changes } = db.prepare(`UPDATE transactions SET raw_json = NULL WHERE raw_json IS NOT NULL`).run();
   if (changes > 0) {
-    db.pragma('secure_delete = ON');
     db.exec('VACUUM');
     db.pragma('wal_checkpoint(TRUNCATE)');
   }

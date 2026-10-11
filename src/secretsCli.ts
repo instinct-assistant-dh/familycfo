@@ -39,6 +39,7 @@ export function encryptAccountsFile(opts: EncryptOptions): { encryptedPath: stri
 
   const envelope = encryptText(text, opts.passphrase);
   const tmp = `${encryptedPath}.tmp`;
+  if (existsSync(tmp)) unlinkSync(tmp); // a leftover from an interrupted run could keep looser permissions
   writeFileSync(tmp, `${JSON.stringify(envelope, null, 2)}\n`, { mode: PRIVATE_FILE_MODE });
   const check = JSON.parse(readFileSync(tmp, 'utf8')) as unknown;
   if (!isEnvelope(check) || decryptText(check, opts.passphrase) !== text) {
