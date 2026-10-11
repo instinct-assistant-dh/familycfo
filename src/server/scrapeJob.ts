@@ -3,6 +3,7 @@ import { scrapeAll } from '../scraper.js';
 import { runPipeline } from '../pipeline.js';
 // reads the bank credentials file; the credentials go only to the scraper and are never returned by the API
 import { loadConfig } from '../config.js';
+import { SecretsError } from '../secrets.js';
 
 /**
  * One scrape at a time, started from the UI: all banks, then the pipeline. The bank's OTP screen
@@ -48,8 +49,12 @@ export function startScrape(db: DB): ScrapeJobState {
   let config: ReturnType<typeof loadConfig>;
   try {
     config = loadConfig();
-  } catch {
-    throw Object.assign(new Error('the scraper configuration is missing or invalid (see accounts.example.json)'), { statusCode: 400 });
+  } catch (err) {
+    // never echo the underlying error: it can quote the credentials file
+    const locked = err instanceof SecretsError;
+    throw Object.assign(new Error(locked
+      ? 'the bank logins are encrypted and locked: restart the app from a terminal, or set FAMILYCFO_PASSPHRASE_FILE'
+      : 'the scraper configuration is missing or invalid (see accounts.example.json)'), { statusCode: 400 });
   }
   const only = process.env.SCRAPE_ONLY?.split(',').map(s => s.trim()).filter(Boolean);
   state = {

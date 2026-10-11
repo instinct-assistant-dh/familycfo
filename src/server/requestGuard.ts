@@ -7,6 +7,8 @@ import type { FastifyInstance } from 'fastify';
  *  - cross-site writes: a plain form POST (no preflight) from another site carries a foreign `Origin` header.
  * Requests without an `Origin` (curl, scripts, same-origin GETs) are allowed: only a browser sends one, and a
  * browser always sends it on a cross-site write.
+ * It also adds response headers that keep the browser from caching, sniffing or framing the data, and rejects a JSON
+ * body that is not an object (`null`, a list, a number), which no route accepts.
  */
 const LOOPBACK_AUTHORITY = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?$/i;
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -25,6 +27,18 @@ export function isLoopbackOrigin(origin: string): boolean {
   return origin.startsWith('http://') && isLoopbackHost(origin.slice(7));
 }
 
+/** Headers for every API response (the SSE chat sets the same ones itself because it writes the raw response). */
+export const SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  // balances and transactions must not sit in the browser or a proxy cache
+  'cache-control': 'no-store',
+  'referrer-policy': 'no-referrer',
+  'cross-origin-resource-policy': 'same-origin',
+  // nobody may put the API (or a document it serves) in a frame
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+};
+
 /** Register before any route so the hook covers all of them. */
 export function registerRequestGuard(app: FastifyInstance): void {
   app.addHook('onRequest', async (req, reply) => {
@@ -36,5 +50,20 @@ export function registerRequestGuard(app: FastifyInstance): void {
 
     const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
     if (FORM_TYPES.has(type)) return reply.code(415).send({ error: 'unsupported content type' });
+  });
+
+  app.addHook('preValidation', async (req, reply) => {
+    if (!WRITE_METHODS.has(req.method) || req.body === undefined) return;
+    const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    if (type === 'application/json' && (typeof req.body !== 'object' || req.body === null || Array.isArray(req.body))) {
+      return reply.code(400).send({ error: 'a JSON object body is required' });
+    }
+  });
+
+  app.addHook('onSend', async (_req, reply, payload) => {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!reply.hasHeader(name)) reply.header(name, value);
+    }
+    return payload;
   });
 }

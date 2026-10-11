@@ -1,3 +1,5 @@
+import { assertSafeCategoryUrl } from './config.js';
+
 /**
  * Ask the external categorizer (an n8n workflow with an LLM that holds the category list) for the
  * category of a transaction, by its description as scraped. Returns the category name it picked
@@ -5,6 +7,8 @@
  */
 export async function categorize(description: string, apiUrl: string): Promise<string | null> {
   try {
+    // every description is sent there: https only (or this computer), no credentials in the URL
+    assertSafeCategoryUrl(apiUrl);
     const res = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

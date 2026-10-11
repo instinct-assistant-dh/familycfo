@@ -3,6 +3,7 @@ dist/
 
 # your bank logins — never commit
 accounts.json
+accounts.enc.json
 
 # the database and its backups hold all your financial data
 *.db

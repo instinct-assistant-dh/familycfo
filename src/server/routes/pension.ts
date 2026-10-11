@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { DB } from '../../db/connection.js';
 import { today } from '../../analytics/common.js';
 import { toApi } from '../crud.js';
+import { safeJsonParse } from '../validate.js';
 
 /**
  * Pension and long-term savings (pension funds, managers' insurance, study funds, provident funds): every product
@@ -24,7 +25,7 @@ export function pensionRoutes(app: FastifyInstance, db: DB): void {
       const { details, ...rest } = a;
       return {
         ...toApi(rest),
-        details: details ? JSON.parse(details) : null,
+        details: safeJsonParse(details, null),
         deposits,
         liquidNow: a.type === 'keren_hishtalmut' && !!a.liquidity_date && a.liquidity_date <= asOf,
       };
@@ -32,7 +33,7 @@ export function pensionRoutes(app: FastifyInstance, db: DB): void {
 
     const reports = (db.prepare(`SELECT * FROM pension_reports ORDER BY as_of DESC, id DESC`).all() as Row[])
       // documentPath: where the data chat opens the report file (its docs/ copy of data/)
-      .map((r): Row => ({ ...toApi(r), summary: JSON.parse(r.summary), documentPath: r.file_path ? `docs/${r.file_path}` : null }));
+      .map((r): Row => ({ ...toApi(r), summary: safeJsonParse(r.summary, {}), documentPath: r.file_path ? `docs/${r.file_path}` : null }));
 
     const sum = (list: Row[], f: (p: Row) => number) => list.reduce((s, p) => s + f(p), 0);
     const value = (p: Row) => Number(p.value ?? 0);

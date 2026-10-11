@@ -25,6 +25,10 @@ policy/report directories on shutdown. Reports go into ignored `test-results/` a
 `npm run check` runs the unit/integration suite, coverage gates and all typechecks. Browser E2E
 is a separate required pre-merge step after installing Chromium.
 
+Credential-encryption tests (`tests/secrets.test.ts`) use made-up logins and a throwaway passphrase in a temporary
+directory; hardening tests (`tests/hardening.integration.test.ts`) cover validation, security headers, error
+handling, document checks and shutdown.
+
 ## Layers and boundaries
 
 - Pure accounting and date logic: household/business shares, incoming money, card installments,

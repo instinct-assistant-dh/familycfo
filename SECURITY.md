@@ -13,8 +13,20 @@ running it.
   Loopback HTTP origins are allowed on any valid port so custom Vite/API ports work without a shared secret.
   This trusts other web apps on this computer; it is not protection against a malicious local process.
 - The scraper's Chrome runs with its sandbox. `CHROME_NO_SANDBOX=1` removes it and is only for Docker / CI.
-- Bank logins are read from `accounts.json` (git-ignored). Treat that file like a password vault: keep the computer's
-  disk encrypted and its user account locked. Where your bank supports it, use a read-only / viewing user for scraping.
+- Bank logins should live only in `accounts.enc.json`: AES-256-GCM with a key derived from your passphrase (scrypt).
+  Create it with `npm run secrets:encrypt`; it checks the result and removes the plain `accounts.json`. The passphrase
+  comes from `FAMILYCFO_PASSPHRASE_FILE` (a `0600` file), `FAMILYCFO_PASSPHRASE`, or a terminal prompt, and is never
+  written anywhere by the app. While the logins are encrypted a stolen copy of the file or a backup is useless without
+  it; once the app runs, the decrypted logins exist in its memory, so this does not defend against malware running as
+  you. A plain `accounts.json` still works but prints a warning. Where your bank supports it, use a read-only /
+  viewing user for scraping.
+- `bank.db` is **not** encrypted (a database cipher such as SQLCipher is a possible later change). It holds
+  transactions, balances and account numbers: use full-disk encryption. The scraper no longer stores the banks' full raw
+  payload (`STORE_RAW_TRANSACTIONS=1` re-enables it; `npm run db:scrub-raw` clears old rows). Deleted rows are
+  overwritten (`secure_delete`).
+- API responses are sent with `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and anti-framing headers (the
+  Vite dev server too), uploaded documents must really be a PDF / PNG / JPEG / WebP, and errors never include SQL or
+  file paths. The data chat accepts at most 2 questions at a time, 20,000 characters each, and stops after 10 minutes.
 - `bank.db`, `backups/` and `data/` hold the data itself. New databases and imported documents are `0600`,
   new data folders are `0700`, and an existing database is tightened to `0600`. Startup warns about the database
   and its WAL/SHM sidecars, credentials, backups, data and `POLICIES_DIR` / `REPORTS_DIR` overrides. Existing user
